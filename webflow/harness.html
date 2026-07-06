@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>steadyGray — Webflow embed harness</title>
+
+	<!-- A variable font with a wght axis (Merriweather) reads well for density equalization.
+	     Any body font works; steadyGray measures whatever is actually rendered. -->
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=Merriweather:opsz,wght@18..144,300..900&display=swap" rel="stylesheet" />
+
+	<style>
+		body {
+			margin: 0;
+			background: #f4f1ea;
+			color: #1a1a1a;
+			font-family: "Merriweather", Georgia, serif;
+			display: flex;
+			justify-content: center;
+			padding: 4rem 1rem;
+		}
+		main { max-width: 34rem; width: 100%; }
+		h1 { font-size: 0.85rem; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.55; }
+		/* A narrowish measure so the paragraph wraps to several lines of uneven density —
+		   that unevenness is exactly what steadyGray equalizes. */
+		.copy {
+			font-size: 1.35rem;
+			line-height: 1.65;
+			text-align: justify;
+		}
+		.note {
+			margin-top: 2.5rem;
+			font-family: system-ui, sans-serif;
+			font-size: 0.9rem;
+			line-height: 1.5;
+			color: #444;
+			border-top: 1px solid #ccc4b4;
+			padding-top: 1rem;
+		}
+	</style>
+</head>
+<body>
+	<main>
+		<h1>steadyGray harness</h1>
+
+		<!--
+			data-steadygray opts this paragraph in. Representative options:
+			  method            — letter-spacing (default), adjusts inter-character spacing per line
+			  max-adjustment    — 0.06em cap on the per-line spacing correction
+			  calibration-factor — 2.5 = slightly stronger correction than the 2.0 default
+			  target-density    — auto = equalize toward the paragraph's own mean density
+		-->
+		<p class="copy"
+		   data-steadygray
+		   data-sg-method="letter-spacing"
+		   data-sg-max-adjustment="0.06"
+		   data-sg-calibration-factor="2.5"
+		   data-sg-target-density="auto">
+			Typographers speak of the “grey value” of a block of text: squint at a
+			well-set paragraph and it should read as an even field of tone, with no
+			line noticeably darker or lighter than its neighbours. Ragged density
+			pulls the eye and fractures the rhythm of reading. steadyGray measures
+			the actual ink area of every rendered line and nudges its spacing until
+			the whole column settles into one steady, even grey.
+		</p>
+
+		<p class="note">
+			<strong>What “working” looks like:</strong> on load, each line of the
+			paragraph gets a slightly different <code>letter-spacing</code> so the
+			overall block looks tonally even — denser lines open up, sparser lines
+			tighten. Inspect the paragraph: its text is now wrapped in
+			<code>&lt;span class="gv-line"&gt;</code> elements each carrying an inline
+			<code>letter-spacing</code>. Resize the window and the effect re-runs
+			(lines regroup, spacing recomputes). In the console,
+			<code>window.SteadyGray</code> exposes <code>init</code>,
+			<code>refit</code>, and <code>destroy</code>.
+		</p>
+	</main>
+
+	<!-- The built IIFE bundle. Run `npm run build:webflow` first to produce it. -->
+	<script src="../dist/steadygray.webflow.min.js"></script>
+</body>
+</html>
