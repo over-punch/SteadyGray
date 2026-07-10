@@ -1,0 +1,60 @@
+<!doctype html>
+<!-- steadyGray/framer/sim.html — Framer-less simulator for the SteadyGray code component.
+     Renders the REAL src/framer/SteadyGray.tsx (transpiled to SteadyGray.sim.mjs) in a plain
+     browser, with the "framer" import mapped to a local shim and React from esm.sh. This proves
+     the component's runtime logic (rendering, applyGrayValue, per-line density rewrite) outside Framer.
+     Build step: npx esbuild src/framer/SteadyGray.tsx --loader:.tsx=tsx --format=esm
+       --jsx=automatic --jsx-import-source=react --outfile=framer/SteadyGray.sim.mjs -->
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>SteadyGray — Framer component simulator</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght,wdth@8..144,100..1000,25..151&display=swap" rel="stylesheet" />
+	<style>
+		body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0e0e12; color: #f4f4f6; padding: 4rem 6vw; }
+		#root { width: 100%; max-width: 40ch; }
+		.note { position: fixed; bottom: 1rem; left: 0; right: 0; text-align: center; font: 0.8rem system-ui; opacity: 0.5; }
+	</style>
+	<script type="importmap">
+	{
+		"imports": {
+			"react": "https://esm.sh/react@18",
+			"react/jsx-runtime": "https://esm.sh/react@18/jsx-runtime",
+			"react-dom/client": "https://esm.sh/react-dom@18/client",
+			"framer": "./framer-shim.js"
+		}
+	}
+	</script>
+</head>
+<body>
+	<div id="root"></div>
+	<p class="note">Simulating the Framer code component in a plain browser — per-line density equalized once on mount.</p>
+	<script type="module">
+		import React from "react"
+		import { createRoot } from "react-dom/client"
+		import SteadyGray from "./SteadyGray.sim.mjs"
+		createRoot(document.getElementById("root")).render(
+			React.createElement(SteadyGray, {
+				text: "The quick brown fox jumps over the lazy dog while a heavy grey cloud drifts slowly across the wide open sky above the quiet valley below the ridge",
+				fontFamily: "Roboto Flex",
+				fontSize: 34,
+				color: "#f4f4f6",
+				textAlign: "left",
+				active: true,
+				method: "font-width",
+				maxAdjustment: 30,
+				tolerance: 0.01,
+				calibrationFactor: 600,
+				autoTarget: true,
+				linePreservation: "none",
+				mode: "equalize",
+				densityMode: "canvas",
+				lineDetection: "bcr",
+			})
+		)
+	</script>
+</body>
+</html>
