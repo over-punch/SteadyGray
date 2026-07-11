@@ -5,6 +5,7 @@ import ToolDirectory from "@/components/ToolDirectory"
 import { version } from "../../../package.json"
 import { version as siteVersion } from "../../package.json"
 import SiteFooter from "../components/SiteFooter"
+import PortsSection from "../components/PortsSection"
 import { MagnetChar } from "@liiift-studio/magnettype"
 
 export default function Home() {
@@ -132,6 +133,14 @@ console.log(GRAY_VALUE_CLASSES)`} />
 				</div>
 				</div>
 			</section>
+
+			<PortsSection
+				npm="@liiift-studio/steadygray"
+				bundle="steadygray"
+				attr="data-steadygray"
+				framerComponent="SteadyGray"
+				repo="Liiift-Studio/SteadyGray"
+			/>
 
 			<SiteFooter current="steadyGray" npmVersion={version} siteVersion={siteVersion} />
 
