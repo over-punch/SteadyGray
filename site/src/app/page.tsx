@@ -95,7 +95,7 @@ removeGrayValue(el, original)`} />
 						<table className="w-full text-xs" aria-label="steadyGray API options">
 							<caption className="sr-only">steadyGray API options reference</caption>
 							<thead><tr className="text-subtle text-left"><th className="pb-2 pr-6 font-normal">Option</th><th className="pb-2 pr-6 font-normal">Default</th><th className="pb-2 font-normal">Description</th></tr></thead>
-							<tbody className="text-muted zebra-bleed">
+							<tbody className="text-muted zebra">
 								<tr className="hover:bg-foreground/5 transition-colors"><td className="py-2 pr-6 font-mono">targetDensity</td><td className="py-2 pr-6">&apos;auto&apos;</td><td className="py-2">Target density ratio (0–1). &apos;auto&apos; uses the average of all lines.</td></tr>
 								<tr className="hover:bg-foreground/5 transition-colors"><td className="py-2 pr-6 font-mono">densityMode</td><td className="py-2 pr-6">&apos;canvas&apos;</td><td className="py-2">&apos;canvas&apos; renders each line off-screen and counts ink pixels. &apos;glyph-path&apos; uses opentype.js to compute true glyph area via bezier paths — font-exact but requires opentype.js and a CORS-accessible font URL. Falls back silently to &apos;canvas&apos; if opentype.js is not installed or the font cannot be loaded.</td></tr>
 								<tr className="hover:bg-foreground/5 transition-colors"><td className="py-2 pr-6 font-mono">fontUrl</td><td className="py-2 pr-6">—</td><td className="py-2">URL of the font file for glyph-path measurement. Required when densityMode is &apos;glyph-path&apos;. Must be same-origin or CORS-enabled.</td></tr>
