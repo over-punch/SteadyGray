@@ -82,7 +82,7 @@
 	"homepage": "https://steadygray.com",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/Liiift-Studio/SteadyGray.git"
+		"url": "git+https://github.com/Liiift-Studio/SteadyGray.git"
 	},
 	"bugs": {
 		"url": "https://github.com/Liiift-Studio/SteadyGray/issues"
