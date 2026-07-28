@@ -159,7 +159,3 @@ The package itself has zero runtime dependencies. Do not remove this entry.
 - **Configurable canvas DPR** — allow overriding the device pixel ratio used for the measurement canvas, to trade accuracy for performance on high-density displays
 - **Iterative convergence** — apply corrections in multiple passes until all lines converge within `tolerance`, rather than a single-pass linear estimate
 - **Per-paragraph target** — `measureLineDensity` is exported as a low-level canvas primitive; a high-level `measureDensity(el)` wrapper that takes just an element would allow cross-paragraph normalization without manually building font strings and canvas contexts
-
----
-
-Current version: 1.2.4
