@@ -1,36 +1,27 @@
 import Demo from "@/components/Demo"
-import CopyInstall from "@/components/CopyInstall"
+import Hero from "@/components/Hero"
 import CodeBlock from "@/components/CodeBlock"
 import { version } from "../../../package.json"
 import { version as siteVersion } from "../../package.json"
 import SiteFooter from "../components/SiteFooter"
 import PortsSection from "../components/PortsSection"
-import { MagnetChar } from "@liiift-studio/magnettype"
 
 export default function Home() {
 	return (
 		<main className="flex flex-col items-center px-6 py-20 gap-24">
 
 			{/* Hero */}
-			<section className="w-full max-w-2xl lg:max-w-5xl flex flex-col gap-6">
-				<div className="flex flex-col gap-2">
-					<p className="text-xs uppercase tracking-[0.18em] font-medium text-muted">even typographic colour</p>
-					<h1 className="text-4xl lg:text-8xl xl:text-9xl" style={{ fontFamily: "var(--font-merriweather), serif", fontVariationSettings: '"wght" 300, "opsz" 144', lineHeight: "1.05em" }}>
-						<MagnetChar as="span" minWeight={300} maxWeight={800} spreadRadius={220} fixedAxes={{ opsz: 144 }}>Even colour,</MagnetChar><br />
-						<MagnetChar as="span" minWeight={300} maxWeight={800} spreadRadius={220} fixedAxes={{ opsz: 144 }} style={{ color: "var(--foreground-subtle)", fontStyle: "italic" }}>line by line.</MagnetChar>
-					</h1>
-				</div>
-				<div className="flex flex-wrap items-center gap-4">
-					<CopyInstall />
-					<a href="https://github.com/Liiift-Studio/SteadyGray" target="_blank" rel="noopener noreferrer" aria-label="SteadyGray on GitHub (opens in new tab)" className="text-sm text-muted hover:text-foreground transition-colors">GitHub ↗</a>
-				</div>
-				<div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted tracking-wide">
-					<span>TypeScript</span><span aria-hidden="true">·</span><span>Canvas pixel sampling</span><span aria-hidden="true">·</span><span>React + Vanilla JS</span>
-				</div>
+			<Hero
+				eyebrow="even typographic colour"
+				title={[{ text: "Even colour," }, { text: "line by line.", italic: true, subtle: true }]}
+				install="@liiift-studio/steadygray"
+				github="https://github.com/Liiift-Studio/SteadyGray"
+				tech={["TypeScript", "Canvas pixel sampling", "React + Vanilla JS"]}
+			>
 				<p className="text-base leading-relaxed max-w-lg">
 					Compositors call it colour — the aggregate grey of a text block. When some lines are denser than others, the paragraph looks uneven. Gray Value measures ink pixel density per line using Canvas and adjusts letter-spacing until the paragraph has even colour throughout.
 				</p>
-			</section>
+			</Hero>
 
 			{/* Demo */}
 			<section className="w-full max-w-2xl lg:max-w-5xl flex flex-col gap-4">
