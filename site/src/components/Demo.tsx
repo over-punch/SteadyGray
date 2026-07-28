@@ -2,6 +2,7 @@
 
 // Interactive gray value demo with cursor/gyro/ambient-light modes, drag-to-inspect circle, and live controls
 import { useState, useEffect, useDeferredValue, useRef, useCallback, useMemo } from "react"
+import { useMediaQuery, useClientValue } from "@/lib/clientValue"
 import { GrayValueText } from "@liiift-studio/steadygray"
 
 const SAMPLE = `The colour of a page — the compositor’s term for the aggregate grey of the text block — is determined by the ratio of ink to space across every line. A line with many narrow letters sits lighter than one with wide letters and generous spacing. Print compositors corrected this by hand, adjusting word spaces to equalise the grey. No web tool has automated this measurement. Gray Value uses Canvas to sample the actual ink pixels in each rendered line, then adjusts letter-spacing to bring every line to the same optical density. The adjustment is invisible when correct — all you notice is that the paragraph looks even.`
@@ -151,15 +152,10 @@ export default function Demo() {
 	const [gyroMaxAdjustment, setGyroMaxAdjustment] = useState(0.05)
 
 	// Detected capabilities — resolved client-side after mount
-	const [showCursor, setShowCursor] = useState(false)
-	const [showGyro, setShowGyro] = useState(false)
-
-	useEffect(() => {
-		const isHover = window.matchMedia('(hover: hover)').matches
-		const isTouch = window.matchMedia('(hover: none)').matches
-		setShowCursor(isHover)
-		setShowGyro(isTouch && 'DeviceOrientationEvent' in window)
-	}, [])
+	const showCursor = useMediaQuery('(hover: hover)')
+	const isTouch = useMediaQuery('(hover: none)')
+	const hasOrientation = useClientValue(() => 'DeviceOrientationEvent' in window, false)
+	const showGyro = isTouch && hasOrientation
 
 	// Blur circle position as fraction of container (0–1)
 	const [circlePos, setCirclePos] = useState({ x: 0.5, y: 0.5 })
@@ -315,7 +311,6 @@ export default function Demo() {
 			fontVariationSettings: '"wght" 300, "opsz" 18, "wdth" 100',
 		}, [method])
 
-	const activeMode = useMemo(() => cursorMode || gyroMode || ambientMode, [cursorMode, gyroMode, ambientMode])
 
 	// Memoised method button titles to avoid recreation on every render
 	const METHOD_TITLES = useMemo<Record<Method, string>>(() => ({
