@@ -1,5 +1,5 @@
 {
-	"name": "@liiift-studio/steadygray",
+	"name": "@overpunch/steadygray",
 	"version": "1.2.6",
 	"description": "Paragraph optical density equalization — measure actual glyph area per line and equalize visual density across all lines",
 	"type": "module",
