@@ -1,12 +1,12 @@
 # Steady Gray
 
-[![npm](https://img.shields.io/npm/v/%40liiift-studio%2Fsteadygray.svg)](https://www.npmjs.com/package/@liiift-studio/steadygray) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![part of liiift type-tools](https://img.shields.io/badge/liiift-type--tools-blueviolet)](https://github.com/Liiift-Studio/type-tools)
+[![npm](https://img.shields.io/npm/v/%40liiift-studio%2Fsteadygray.svg)](https://www.npmjs.com/package/@overpunch/steadygray) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![part of liiift type-tools](https://img.shields.io/badge/liiift-type--tools-blueviolet)](https://github.com/Liiift-Studio/type-tools)
 
 Compositors call it colour — the aggregate grey of a text block. When some lines are denser than others, the paragraph looks uneven. Steady Gray measures ink pixel density per line by rendering to an off-screen Canvas, then adjusts letter-spacing until every line matches the target. Even colour, line by line.
 
 ![A paragraph of serif text with even optical colour after Steady Gray equalizes each line's ink density](https://raw.githubusercontent.com/Liiift-Studio/SteadyGray/main/assets/hero.png?v=1)
 
-**[steadygray.com](https://steadygray.com)** · [npm](https://www.npmjs.com/package/@liiift-studio/steadygray) · [GitHub](https://github.com/Liiift-Studio/SteadyGray)
+**[steadygray.com](https://steadygray.com)** · [npm](https://www.npmjs.com/package/@overpunch/steadygray) · [GitHub](https://github.com/Liiift-Studio/SteadyGray)
 
 TypeScript · Canvas pixel sampling · React + Vanilla JS
 
@@ -15,7 +15,7 @@ TypeScript · Canvas pixel sampling · React + Vanilla JS
 ## Install
 
 ```bash
-npm install @liiift-studio/steadygray
+npm install @overpunch/steadygray
 ```
 
 ---
@@ -27,7 +27,7 @@ npm install @liiift-studio/steadygray
 ### React component
 
 ```tsx
-import { GrayValueText } from '@liiift-studio/steadygray'
+import { GrayValueText } from '@overpunch/steadygray'
 
 <GrayValueText maxAdjustment={0.05} calibrationFactor={2} linePreservation="scale">
   Your paragraph text here...
@@ -39,7 +39,7 @@ import { GrayValueText } from '@liiift-studio/steadygray'
 ### React hook
 
 ```tsx
-import { useGrayValue } from '@liiift-studio/steadygray'
+import { useGrayValue } from '@overpunch/steadygray'
 
 // Inside a React component:
 const ref = useGrayValue({ maxAdjustment: 0.05, calibrationFactor: 2 })
@@ -51,7 +51,7 @@ The hook re-runs automatically on resize via `ResizeObserver` and after fonts lo
 ### Vanilla JS
 
 ```ts
-import { applyGrayValue, removeGrayValue, getCleanHTML } from '@liiift-studio/steadygray'
+import { applyGrayValue, removeGrayValue, getCleanHTML } from '@overpunch/steadygray'
 
 const el = document.querySelector('p')
 const original = getCleanHTML(el)
@@ -75,7 +75,7 @@ ro.observe(el)
 ### TypeScript
 
 ```ts
-import type { GrayValueOptions } from '@liiift-studio/steadygray'
+import type { GrayValueOptions } from '@overpunch/steadygray'
 
 const opts: GrayValueOptions = { targetDensity: 0.35, maxAdjustment: 0.05, linePreservation: 'scale' }
 ```

@@ -14,7 +14,7 @@ export default function Home() {
 			<Hero
 				eyebrow="even typographic colour"
 				title={[{ text: "Even colour," }, { text: "line by line.", italic: true, subtle: true }]}
-				install="@liiift-studio/steadygray"
+				install="@overpunch/steadygray"
 				github="https://github.com/Liiift-Studio/SteadyGray"
 				tech={["TypeScript", "Canvas pixel sampling", "React + Vanilla JS"]}
 			>
@@ -54,7 +54,7 @@ export default function Home() {
 				<div className="flex flex-col gap-8 text-sm">
 					<div className="flex flex-col gap-3">
 						<p className="text-muted">Drop-in component</p>
-						<CodeBlock code={`import { GrayValueText } from '@liiift-studio/steadygray'
+						<CodeBlock code={`import { GrayValueText } from '@overpunch/steadygray'
 
 <GrayValueText maxAdjustment={0.05} calibrationFactor={2}>
   Your paragraph text here...
@@ -62,14 +62,14 @@ export default function Home() {
 					</div>
 					<div className="flex flex-col gap-3">
 						<p className="text-muted">Hook</p>
-						<CodeBlock code={`import { useGrayValue } from '@liiift-studio/steadygray'
+						<CodeBlock code={`import { useGrayValue } from '@overpunch/steadygray'
 
 const ref = useGrayValue({ maxAdjustment: 0.05, calibrationFactor: 2 })
 <p ref={ref}>{children}</p>`} />
 					</div>
 					<div className="flex flex-col gap-3">
 						<p className="text-muted">Vanilla JS</p>
-						<CodeBlock code={`import { applyGrayValue, removeGrayValue, getCleanHTML } from '@liiift-studio/steadygray'
+						<CodeBlock code={`import { applyGrayValue, removeGrayValue, getCleanHTML } from '@overpunch/steadygray'
 
 const el = document.querySelector('p')
 // Call getCleanHTML BEFORE the first applyGrayValue — it strips injected spans,
@@ -104,7 +104,7 @@ removeGrayValue(el, original)`} />
 					</div>
 				<div className="flex flex-col gap-3">
 					<p className="text-muted">Additional exports</p>
-					<CodeBlock code={`import { measureLineDensity, GRAY_VALUE_CLASSES } from '@liiift-studio/steadygray'
+					<CodeBlock code={`import { measureLineDensity, GRAY_VALUE_CLASSES } from '@overpunch/steadygray'
 
 // Sample ink density of a single line element directly:
 const density = measureLineDensity(lineEl, { densityMode: 'canvas' })
@@ -125,7 +125,7 @@ console.log(GRAY_VALUE_CLASSES)`} />
 			</section>
 
 			<PortsSection
-				npm="@liiift-studio/steadygray"
+				npm="@overpunch/steadygray"
 				bundle="steadygray"
 				attr="data-steadygray"
 				framerComponent="SteadyGray"
