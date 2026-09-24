@@ -15,7 +15,7 @@ export default function Home() {
 				eyebrow="even typographic colour"
 				title={[{ text: "Even colour," }, { text: "line by line.", italic: true, subtle: true }]}
 				install="@overpunch/steadygray"
-				github="https://github.com/Liiift-Studio/SteadyGray"
+				github="https://github.com/over-punch/SteadyGray"
 				tech={["TypeScript", "Canvas pixel sampling", "React + Vanilla JS"]}
 			>
 				<p className="text-base leading-relaxed max-w-lg">
@@ -129,7 +129,7 @@ console.log(GRAY_VALUE_CLASSES)`} />
 				bundle="steadygray"
 				attr="data-steadygray"
 				framerComponent="SteadyGray"
-				repo="Liiift-Studio/SteadyGray"
+				repo="over-punch/SteadyGray"
 			/>
 
 			<SiteFooter current="steadyGray" npmVersion={version} siteVersion={siteVersion} />

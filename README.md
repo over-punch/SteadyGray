@@ -1,12 +1,12 @@
 # Steady Gray
 
-[![npm](https://img.shields.io/npm/v/%40liiift-studio%2Fsteadygray.svg)](https://www.npmjs.com/package/@overpunch/steadygray) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![part of liiift type-tools](https://img.shields.io/badge/liiift-type--tools-blueviolet)](https://github.com/Liiift-Studio/type-tools)
+[![npm](https://img.shields.io/npm/v/%40overpunch%2Fsteadygray.svg)](https://www.npmjs.com/package/@overpunch/steadygray) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![part of liiift type-tools](https://img.shields.io/badge/liiift-type--tools-blueviolet)](https://github.com/over-punch/type-tools)
 
 Compositors call it colour — the aggregate grey of a text block. When some lines are denser than others, the paragraph looks uneven. Steady Gray measures ink pixel density per line by rendering to an off-screen Canvas, then adjusts letter-spacing until every line matches the target. Even colour, line by line.
 
-![A paragraph of serif text with even optical colour after Steady Gray equalizes each line's ink density](https://raw.githubusercontent.com/Liiift-Studio/SteadyGray/main/assets/hero.png?v=1)
+![A paragraph of serif text with even optical colour after Steady Gray equalizes each line's ink density](https://raw.githubusercontent.com/over-punch/SteadyGray/main/assets/hero.png?v=1)
 
-**[steadygray.com](https://steadygray.com)** · [npm](https://www.npmjs.com/package/@overpunch/steadygray) · [GitHub](https://github.com/Liiift-Studio/SteadyGray)
+**[steadygray.com](https://steadygray.com)** · [npm](https://www.npmjs.com/package/@overpunch/steadygray) · [GitHub](https://github.com/over-punch/SteadyGray)
 
 TypeScript · Canvas pixel sampling · React + Vanilla JS
 
@@ -120,7 +120,7 @@ const opts: GrayValueOptions = { targetDensity: 0.35, maxAdjustment: 0.05, lineP
 
 ## How it works
 
-![Before and after comparison: the same paragraph shown with uneven per-line ink density, then equalized by Steady Gray, with a per-line ink-density meter beside each showing the measured densities converging](https://raw.githubusercontent.com/Liiift-Studio/SteadyGray/main/assets/before-after.png?v=1)
+![Before and after comparison: the same paragraph shown with uneven per-line ink density, then equalized by Steady Gray, with a per-line ink-density meter beside each showing the measured densities converging](https://raw.githubusercontent.com/over-punch/SteadyGray/main/assets/before-after.png?v=1)
 
 *The meters on the right show each line's measured ink-pixel density. Before correction the densities vary line to line; after correction they converge toward the target.*
 
