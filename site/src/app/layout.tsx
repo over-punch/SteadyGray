@@ -34,7 +34,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
 	return (
 		<html lang="en" className={`h-full antialiased ${inter.variable}`}>
 			<body className="min-h-full flex flex-col">
-				<SiteHeader current="steadyGray" githubUrl="https://github.com/Liiift-Studio/SteadyGray" />{children}</body>
+				<SiteHeader current="steadyGray" githubUrl="https://github.com/over-punch/SteadyGray" />{children}</body>
 		</html>
 	)
 }
