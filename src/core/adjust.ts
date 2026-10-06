@@ -16,7 +16,10 @@ type OpentypeGlyphPath = {
 	>
 }
 type OpentypeGlyph = { path: OpentypeGlyphPath; advanceWidth: number }
-type OpentypeModule = { load: (url: string, cb: (err: Error | null, font?: OpentypeFont) => void) => void }
+type OpentypeModule = {
+	parse?: (buffer: ArrayBuffer) => OpentypeFont
+	load?: (url: string, cb: (err: Error | null, font?: OpentypeFont) => void) => void
+}
 
 let _opentype: OpentypeModule | null = null
 let _opentypeLoading = false
@@ -26,7 +29,11 @@ function tryLoadOpentype(): void {
 	if (_opentype !== null || _opentypeLoading) return
 	_opentypeLoading = true
 	import(/* @vite-ignore */ 'opentype.js' as string)
-		.then((m) => { _opentype = m as OpentypeModule })
+		.then((m) => {
+			// ESM builds expose parse/load on the namespace; CommonJS builds on `default`.
+			const mod = m as OpentypeModule & { default?: OpentypeModule }
+			_opentype = mod.parse || mod.load ? mod : (mod.default ?? null)
+		})
 		.catch(() => {
 			console.warn('[steadygray] densityMode: "glyph-path" requires opentype.js — falling back to canvas')
 		})
@@ -38,13 +45,36 @@ function tryLoadOpentype(): void {
  */
 function loadFont(url: string, cb: (font: OpentypeFont | null) => void): void {
 	if (_fontCache.has(url)) { cb(_fontCache.get(url) ?? null); return }
-	if (!_opentype) { cb(null); return }
-	_opentype.load(url, (err, font) => {
-		const result = err || !font ? null : font
-		_fontCache.set(url, result)
-		cb(result)
-	})
+	const ot = _opentype
+	if (!ot) { cb(null); return }
+	// Several applies may ask for the same font while it downloads: one fetch, every caller told.
+	const waiting = _fontWaiters.get(url)
+	if (waiting) { waiting.push(cb); return }
+	_fontWaiters.set(url, [cb])
+	const done = (font: OpentypeFont | null) => {
+		_fontCache.set(url, font)
+		const cbs = _fontWaiters.get(url) ?? []
+		_fontWaiters.delete(url)
+		cbs.forEach((fn) => fn(font))
+	}
+	if (ot.parse && typeof fetch === 'function') {
+		// fetch + parse works in opentype.js 1.x and 2.x (2.x deprecated load(), which never calls back).
+		fetch(url)
+			.then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error(String(res.status)))))
+			.then((buf) => done(ot.parse!(buf)))
+			.catch(() => {
+				console.warn(`[steadygray] could not load ${url} for glyph-path density — using canvas`)
+				done(null)
+			})
+	} else if (ot.load) {
+		ot.load(url, (err, font) => done(err || !font ? null : font))
+	} else {
+		done(null)
+	}
 }
+
+/** Callbacks waiting for a font that is downloading. */
+const _fontWaiters = new Map<string, ((font: OpentypeFont | null) => void)[]>()
 
 /**
  * Compute the approximate filled area of a glyph path using the shoelace formula.
@@ -69,7 +99,9 @@ function glyphPathArea(glyph: OpentypeGlyph): number {
 			const [x1, y1] = contourPoints[(i + 1) % n]
 			sum += x0 * y1 - x1 * y0
 		}
-		area += Math.abs(sum / 2)
+		// Signed: a counter (the hole in o, e, a) winds the other way and subtracts from the outer
+		// contour. Summing absolute values counted counters as ink.
+		area += sum / 2
 		contourPoints = []
 	}
 
@@ -208,23 +240,6 @@ const DEFAULTS = {
 }
 
 /**
- * Returns the computed font string suitable for use as Canvas ctx.font.
- * Canvas does not support font-variation-settings, so we approximate using
- * numeric font-weight. Relative density comparisons remain consistent across
- * lines because all lines use the same font string.
- *
- * @param el - Element whose computed styles are read
- */
-function getCanvasFontStyle(el: HTMLElement): string {
-	const style = getComputedStyle(el)
-	const weight = style.fontWeight
-	const size = style.fontSize
-	// Take only the first font-family entry, stripping quotes
-	const family = style.fontFamily.split(',')[0].replace(/['"]/g, '').trim()
-	return `${weight} ${size} ${family}`
-}
-
-/**
  * Compute the relative luminance of an sRGB colour string (e.g. 'rgb(30, 30, 30)').
  * Returns a value in [0, 1] where 0 is black and 1 is white.
  * Used to detect dark-background contexts so canvas ink counting can be adapted.
@@ -322,13 +337,145 @@ export function measureLineDensity(
 	return totalPixels > 0 ? inkPixels / totalPixels : 0
 }
 
+/** Per-item data kept during one apply: the whitespace before it, an author <br> before it, and whether it is a whole element. */
+interface ItemMeta {
+	lead: string
+	breakBefore: HTMLBRElement | null
+	atomic?: boolean
+}
+
+/** A piece of one item on one line: usually a whole word, or part of a word the browser breaks. */
+interface Segment {
+	item: HTMLElement
+	text: string
+	top: number
+	bottom: number
+	lead: string
+	breakBefore: HTMLBRElement | null
+	atomic: boolean
+	/** Whether this is the item's first segment (its start is the span's start). */
+	first: boolean
+}
+
 /**
- * Returns the innerHTML of an element with all gray-value injected spans removed,
- * unwrapping their children in place. Safe for complex markup. Idempotent.
+ * Splits a text node that the browser lays out over several lines into one piece per line, by
+ * measuring where each character's box starts a new line. Used only for the rare word that wraps.
+ */
+function splitAtLineBreaks(node: Text, text: string): { text: string; top: number; bottom: number }[] {
+	const pieces: { text: string; top: number; bottom: number }[] = []
+	const range = document.createRange()
+	let start = 0
+	let top = NaN, bottom = NaN
+	for (let i = 0; i < text.length; i++) {
+		range.setStart(node, i)
+		range.setEnd(node, i + 1)
+		const rect = range.getClientRects()[0]
+		if (!rect) continue
+		const middle = (rect.top + rect.bottom) / 2
+		if (Number.isNaN(top)) { top = rect.top; bottom = rect.bottom; continue }
+		if (middle > bottom) {
+			pieces.push({ text: text.slice(start, i), top, bottom })
+			start = i
+			top = rect.top
+			bottom = rect.bottom
+		} else {
+			bottom = Math.max(bottom, rect.bottom)
+		}
+	}
+	pieces.push({ text: text.slice(start), top: Number.isNaN(top) ? 0 : top, bottom: Number.isNaN(bottom) ? 0 : bottom })
+	return pieces.filter((p) => p.text.length > 0)
+}
+
+/** Elements kept whole during the rebuild (no text of their own to split). */
+const ATOMIC_TAGS = new Set(['IMG', 'SVG', 'INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'VIDEO', 'AUDIO', 'CANVAS', 'IFRAME', 'OBJECT', 'MATH'])
+
+/** Scripts written without spaces between words: every grapheme is a possible line break. */
+const UNSPACED_SCRIPT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u
+
+/**
+ * Splits a space-free token into the pieces a line may break between: graphemes for CJK, Thai and
+ * similar scripts (Intl.Segmenter keeps combining marks with their base), the whole token otherwise.
+ */
+function splitUnspaced(token: string): string[] {
+	if (!UNSPACED_SCRIPT.test(token)) return [token]
+	const Seg = (Intl as unknown as { Segmenter?: new (l?: string, o?: { granularity: string }) => { segment(t: string): Iterable<{ segment: string }> } }).Segmenter
+	if (!Seg) return Array.from(token)
+	return Array.from(new Seg(undefined, { granularity: 'grapheme' }).segment(token), (seg) => seg.segment)
+}
+
+/** A finite number, else the default (with a one-time warning). */
+function finiteOr(value: unknown, fallback: number, name: string): number {
+	if (value === undefined) return fallback
+	if (typeof value === 'number' && Number.isFinite(value)) return value
+	if (!warned.has(name)) {
+		warned.add(name)
+		console.warn(`[steadyGray] ${name} must be a finite number; got ${String(value)}, using ${fallback}`)
+	}
+	return fallback
+}
+
+/** Warnings already printed. */
+const warned = new Set<string>()
+
+/** The snapshot each processed element was built from, returned by getCleanHTML. */
+const originals = new WeakMap<HTMLElement, string>()
+
+/**
+ * The element's original nodes: each element's child list, so a refit or removal can put the very
+ * same nodes back (keeping their event listeners, React's included) instead of re-parsing HTML.
+ */
+interface NodeSnapshot { html: string; children: Map<Node, Node[]> }
+const snapshots = new WeakMap<HTMLElement, NodeSnapshot>()
+
+/** Records every element's child list under root. */
+function takeSnapshot(root: HTMLElement, html: string): NodeSnapshot {
+	const children = new Map<Node, Node[]>()
+	const visit = (node: Node) => {
+		children.set(node, Array.from(node.childNodes))
+		node.childNodes.forEach((child) => { if (child.nodeType === Node.ELEMENT_NODE) visit(child) })
+	}
+	visit(root)
+	return { html, children }
+}
+
+/** Puts the original nodes back where they were. */
+function restoreSnapshot(snapshot: NodeSnapshot): void {
+	snapshot.children.forEach((kids, parent) => (parent as Element).replaceChildren(...kids))
+}
+
+/**
+ * Pass 1: bring the element back to its original content, reusing the original nodes when they
+ * are still known (a refit, or a first run on an element that already holds originalHTML).
+ */
+function resetElement(element: HTMLElement, originalHTML: string): void {
+	const snap = snapshots.get(element)
+	if (snap && snap.html === originalHTML) {
+		restoreSnapshot(snap)
+		return
+	}
+	if (snap) restoreSnapshot(snap)
+	const current = element.querySelector(`.${GRAY_VALUE_CLASSES.line}`) ? null : element.innerHTML
+	if (current !== originalHTML) element.innerHTML = originalHTML
+	snapshots.set(element, takeSnapshot(element, originalHTML))
+}
+
+// ─── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * Strips all optical-margin injected markup from a clone of the element and returns the clean
+ * innerHTML (the author's own <br> tags are kept). Safe to call multiple times — idempotent.
+ *
+ * @param el - Element that may contain optical-margin markup
+
+/**
+ * Returns the element's original innerHTML: for an element this library processed, the exact
+ * snapshot it was built from; otherwise the innerHTML with any gray-value markup removed. Idempotent.
  *
  * @param el - Element that may contain gray-value markup
  */
 export function getCleanHTML(el: HTMLElement): string {
+	const original = originals.get(el)
+	if (original !== undefined && el.querySelector(`.${GRAY_VALUE_CLASSES.line}`)) return original
 	const clone = el.cloneNode(true) as HTMLElement
 	const gvSpans = clone.querySelectorAll(
 		`.${GRAY_VALUE_CLASSES.word}, .${GRAY_VALUE_CLASSES.line}`,
@@ -341,24 +488,53 @@ export function getCleanHTML(el: HTMLElement): string {
 	})
 	// Also remove any injected <br> elements between lines
 	clone.querySelectorAll('br[data-gv-break]').forEach((br) => br.remove())
+	clone.normalize()
 	return clone.innerHTML
 }
 
 /**
+ * The canvas font for an element: style, weight, size and the whole computed family list (the
+ * browser quotes names that need it, such as "Source Serif 4", which canvas rejects unquoted).
+ */
+function canvasFontFor(cs: CSSStyleDeclaration): string {
+	return `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+}
+
+/** The colour actually behind an element: the nearest ancestor with a non-transparent background (white if none). */
+function effectiveBackground(el: HTMLElement): string {
+	let node: HTMLElement | null = el
+	while (node) {
+		const bg = getComputedStyle(node).backgroundColor
+		const alpha = /rgba\([^)]*,\s*([\d.]+)\)/.exec(bg)
+		if (bg && bg !== 'transparent' && !(alpha && parseFloat(alpha[1]) === 0)) return bg
+		node = node.parentElement
+	}
+	return 'rgb(255, 255, 255)'
+}
+
+/** Replaces or adds one axis in a font-variation-settings string, keeping the others. */
+function withAxis(base: string, tag: string, value: number): string {
+	const entry = `"${tag}" ${value}`
+	if (!base || base === 'normal') return entry
+	const re = new RegExp(`(["'])${tag}\\1\\s+-?[\\d.eE+-]+`)
+	return re.test(base) ? base.replace(re, entry) : `${base}, ${entry}`
+}
+
+/** Most recent apply per element, so a font that finishes loading re-applies only if nothing newer ran. */
+const latestApply = new WeakMap<HTMLElement, object>()
+
+/**
  * Applies gray-value optical density equalization to an element.
  *
- * Algorithm (7 passes):
- *  1. Reset — restore original HTML
- *  2. Word wrap — wrap each word in a gv-word span
- *  3. Read phase — group words into visual lines via BCR
- *  4. Measure — render each line to Canvas and compute density ratio
- *  5. Target — compute target density (average or user-specified)
- *  6. Adjust — calculate per-line letter-spacing via linear approximation
- *  7. Write — rebuild HTML with gv-line spans carrying adjusted spacing
- *
- * Note: binary-search refinement of the spacing value is a future enhancement.
- * The linear approximation (calibrationFactor × density delta) is sufficient for v1
- * because relative density comparison between lines is what matters most.
+ * Algorithm:
+ *  1. Reset — bring back the original content (the original nodes, when known)
+ *  2. Word wrap — wrap each word in a plain inline gv-word span, leaving the spaces between words in
+ *     the text flow, so the browser breaks lines exactly as it does for the original text
+ *  3. Read — group words into visual lines by position (a word the browser breaks is split there)
+ *  4. Measure — render each line to Canvas and compute its ink density
+ *  5. Target — the average density (or a given one); readability mode spreads it per line
+ *  6. Adjust — a per-line correction from the density difference
+ *  7. Write — one gv-line span per line (inline markup kept) carrying the correction
  *
  * @param element      - Live DOM element to adjust (must be rendered and visible)
  * @param originalHTML - HTML snapshot taken before the first adjustment run
@@ -368,367 +544,412 @@ export function getCleanHTML(el: HTMLElement): string {
 export function applyGrayValue(
 	element: HTMLElement,
 	originalHTML: string,
-	options: GrayValueOptions = {},
+	options: GrayValueOptions | null = {},
 	_canvas?: HTMLCanvasElement,
 ): void {
 	if (typeof window === 'undefined') return
+	const opts = options ?? {}
 
-	// active:false — skip all processing and restore original HTML immediately
-	if ((options.active ?? true) === false) {
-		element.innerHTML = originalHTML
+	// active:false, or an e-ink / slow-refresh display: restore the original content and stop.
+	if ((opts.active ?? true) === false || window.matchMedia?.('(update: slow)')?.matches) {
+		resetElement(element, originalHTML)
 		return
 	}
 
-	// E-ink / slow-refresh displays (Kindle, Remarkable, etc.) — CSS transitions
-	// produce no visible effect but the canvas pixel-counting work still runs.
-	// Skip the entire adjustment and restore the original HTML immediately.
-	if (window.matchMedia?.('(update: slow)')?.matches) {
-		element.innerHTML = originalHTML
-		return
-	}
+	// Resolve and validate options
+	const targetDensityOpt = typeof opts.targetDensity === 'number'
+		? (Number.isFinite(opts.targetDensity) && opts.targetDensity >= 0 && opts.targetDensity <= 1 ? opts.targetDensity : (warnOnce(`[steadyGray] targetDensity must be between 0 and 1 or 'auto'; got ${opts.targetDensity}, using 'auto'`), 'auto' as const))
+		: DEFAULTS.targetDensity
+	const method = opts.method ?? DEFAULTS.method
+	const maxAdjustment = Math.abs(finiteOr(opts.maxAdjustment, method === 'font-weight' ? 100 : method === 'font-width' ? 30 : DEFAULTS.maxAdjustment, 'maxAdjustment'))
+	const tolerance = Math.abs(finiteOr(opts.tolerance, DEFAULTS.tolerance, 'tolerance'))
+	const calibrationFactor = finiteOr(opts.calibrationFactor, DEFAULTS.calibrationFactor, 'calibrationFactor')
+	const linePreservation = opts.linePreservation ?? 'none'
+	const densityMode = opts.densityMode ?? 'canvas'
+	const mode = opts.mode ?? DEFAULTS.mode
+	const complexity = opts.complexity ?? DEFAULTS.complexity
+	const strength = Math.max(0, Math.min(1, finiteOr(opts.strength, DEFAULTS.strength, 'strength')))
 
-	// Save scroll position — iOS Safari does not support overflow-anchor: none
-	const scrollY = window.scrollY
-
-	// Resolve options
-	const targetDensityOpt = options.targetDensity ?? DEFAULTS.targetDensity
-	const method = options.method ?? DEFAULTS.method
-	const maxAdjustment = options.maxAdjustment ?? DEFAULTS.maxAdjustment
-	const tolerance = options.tolerance ?? DEFAULTS.tolerance
-	const calibrationFactor = options.calibrationFactor ?? DEFAULTS.calibrationFactor
-	const linePreservation = options.linePreservation ?? 'none'
-	const densityMode = options.densityMode ?? 'canvas'
-	const mode = options.mode ?? DEFAULTS.mode
-	const complexity = options.complexity ?? DEFAULTS.complexity
-	const strength = Math.max(0, Math.min(1, options.strength ?? DEFAULTS.strength))
-
-	// Kick off opentype.js load when glyph-path mode is requested
+	// Optional modules: the first apply falls back while they load, then re-applies once.
+	const applyToken = {}
+	latestApply.set(element, applyToken)
 	if (densityMode === 'glyph-path') tryLoadOpentype()
-
-	// Kick off syllable load when readability mode requests it
 	if (mode === 'readability' && complexity === 'syllable') tryLoadSyllable()
 
 	// --- Pass 1: Reset ---
-	element.innerHTML = originalHTML
+	resetElement(element, originalHTML)
+	originals.set(element, originalHTML)
 
-	if (!element.offsetWidth) {
-		// Element is not laid out — restore scroll and return gracefully
-		requestAnimationFrame(() => {
-			if (Math.abs(window.scrollY - scrollY) > 2) {
-				window.scrollTo({ top: scrollY, behavior: 'instant' })
-			}
-		})
-		return
-	}
+	if (!element.offsetWidth && !element.getBoundingClientRect().width) return
+	if (!originalHTML.trim()) return
 
-	const containerWidth = element.offsetWidth
-	const fontSize = parseFloat(getComputedStyle(element).fontSize) || 16
-	const fontStyle = getCanvasFontStyle(element)
-
-	// Detect dark-mode context: when the background is darker than the text,
-	// the canvas pixel-counting must be inverted to count light pixels as ink.
 	const computedStyle = getComputedStyle(element)
-	const fgLuminance = relativeLuminance(computedStyle.color)
-	const bgLuminance = relativeLuminance(computedStyle.backgroundColor)
-	const darkMode = bgLuminance < fgLuminance
+	const fontSize = parseFloat(computedStyle.fontSize) || 16
+	const fontStyle = canvasFontFor(computedStyle)
+	const px = (v: string) => parseFloat(v) || 0
+	const contentWidth = element.getBoundingClientRect().width - px(computedStyle.paddingLeft) - px(computedStyle.paddingRight) - px(computedStyle.borderLeftWidth) - px(computedStyle.borderRightWidth)
+
+	// Dark-mode context: text lighter than what's actually behind it (the nearest non-transparent
+	// background), so canvas counting must treat light pixels as ink.
+	const darkMode = relativeLuminance(effectiveBackground(element)) < relativeLuminance(computedStyle.color)
 	const baseWeight = parseFloat(computedStyle.fontWeight) || 400
+	const baseFVS = computedStyle.fontVariationSettings || 'normal'
+	const authorLetterSpacing = computedStyle.letterSpacing && computedStyle.letterSpacing !== 'normal' ? computedStyle.letterSpacing : ''
+	const authorWordSpacing = computedStyle.wordSpacing && computedStyle.wordSpacing !== 'normal' && computedStyle.wordSpacing !== '0px' ? computedStyle.wordSpacing : ''
 
 	// --- Pass 2: Word wrap ---
-	// Recursive childNodes traversal (not createTreeWalker — happy-dom bug).
-	// Each text node is split into word spans so BCR-based line detection works.
-	const textNodes: Text[] = []
-	;(function collectTextNodes(node: Node) {
-		if (node.nodeType === Node.TEXT_NODE) {
-			textNodes.push(node as Text)
-		} else {
-			node.childNodes.forEach(collectTextNodes)
-		}
-	})(element)
+	// Each word goes in a plain inline span holding only the word; the whitespace around it stays as
+	// text in the flow. (Inline-block word spans with their leading space inside dropped that space,
+	// packed lines too tightly, and the locked nowrap lines then overflowed.) Text without spaces (CJK,
+	// Thai) is split into graphemes. Author <br>, images and other childless elements are atomic items.
+	const items: HTMLElement[] = []
+	const meta = new WeakMap<Element, ItemMeta>()
+	let pendingSpace = ''
+	let pendingBreak: HTMLBRElement | null = null
 
-	const wordSpans: HTMLElement[] = []
-
-	for (const textNode of textNodes) {
-		const text = textNode.textContent ?? ''
-		if (!text.trim()) continue
-
-		const tokens = text.split(/(\S+)/)
-		const fragment = document.createDocumentFragment()
-
-		for (let i = 0; i < tokens.length; i += 2) {
-			const space = tokens[i]       // whitespace before this word
-			const word  = tokens[i + 1]   // the word itself
-			if (!word) continue
-
-			const isLastWord = tokens[i + 3] === undefined
-			const trailingSpace = isLastWord ? (tokens[i + 2] ?? '') : ''
-
-			const span = document.createElement('span')
-			span.className = GRAY_VALUE_CLASSES.word
-			span.style.cssText = 'display:inline-block;white-space:nowrap;'
-			span.appendChild(document.createTextNode(space + word + trailingSpace))
-			fragment.appendChild(span)
-			wordSpans.push(span)
-		}
-
-		textNode.parentNode!.replaceChild(fragment, textNode)
+	const pushWord = (span: HTMLElement, lead: string) => {
+		meta.set(span, { lead: pendingSpace + lead, breakBefore: pendingBreak })
+		pendingSpace = ''
+		pendingBreak = null
+		items.push(span)
 	}
 
-	if (wordSpans.length === 0) {
-		// Nothing to process — restore scroll and return
-		requestAnimationFrame(() => {
-			if (Math.abs(window.scrollY - scrollY) > 2) {
-				window.scrollTo({ top: scrollY, behavior: 'instant' })
+	const walk = (node: Node): void => {
+		if (node.nodeType === Node.TEXT_NODE) {
+			const textNode = node as Text
+			const text = textNode.textContent ?? ''
+			if (!text.trim()) {
+				pendingSpace += text
+				return
 			}
-		})
+			const fragment = document.createDocumentFragment()
+			let lead = ''
+			for (const token of text.split(/(\s+)/)) {
+				if (!token) continue
+				if (/^\s+$/.test(token)) {
+					fragment.appendChild(document.createTextNode(token))
+					lead += token
+					continue
+				}
+				for (const piece of splitUnspaced(token)) {
+					const span = document.createElement('span')
+					span.className = GRAY_VALUE_CLASSES.word
+					// A locked nowrap line can't hyphenate, so the measurement mustn't either.
+					span.style.hyphens = 'manual'
+					span.textContent = piece
+					fragment.appendChild(span)
+					pushWord(span, lead)
+					lead = ''
+				}
+			}
+			pendingSpace += lead
+			textNode.parentNode!.replaceChild(fragment, textNode)
+			return
+		}
+		if (node.nodeType !== Node.ELEMENT_NODE) return
+		const el = node as Element
+		if (el.tagName === 'BR') {
+			pendingBreak = el as HTMLBRElement
+			return
+		}
+		if (!el.hasChildNodes() || ATOMIC_TAGS.has(el.tagName)) {
+			meta.set(el, { lead: pendingSpace, breakBefore: pendingBreak, atomic: true })
+			pendingSpace = ''
+			pendingBreak = null
+			items.push(el as HTMLElement)
+			return
+		}
+		Array.from(el.childNodes).forEach(walk)
+	}
+	Array.from(element.childNodes).forEach(walk)
+
+	if (items.length === 0) {
+		resetElement(element, originalHTML)
 		return
 	}
 
-	// --- Pass 3: Group word spans into visual lines ---
-	// Canvas path: pretext arithmetic (no forced reflow on resize).
-	// BCR path: getBoundingClientRect — ground truth for actual browser layout.
-
-	const lineDetection = options.lineDetection ?? 'bcr'
+	// --- Pass 3: Group into lines ---
+	const lineDetection = opts.lineDetection ?? 'bcr'
 	if (lineDetection === 'canvas') tryLoadPretext()
+	const usePretext = lineDetection === 'canvas' && _pretext !== null
 
-	const useCanvas = lineDetection === 'canvas' && _pretext !== null
-
-	interface LineData {
-		/** Raw text content of the line (spaces collapsed) */
-		text: string
-		/** Rendered width of the line in CSS pixels */
-		width: number
-		/** Rendered height (line-height) in CSS pixels */
-		height: number
-		/** The word span elements belonging to this line */
-		spans: HTMLElement[]
-	}
-
-	const lines: LineData[] = []
-
-	if (useCanvas) {
-		// Canvas path — pretext gives us line texts and widths directly
+	let lines: Segment[][] = []
+	if (usePretext) {
+		// Canvas path — pretext gives line texts; words are matched to them in order.
 		const cached = pretextCache.get(element)
 		let prepared: unknown
 		if (cached && cached.originalHTML === originalHTML) {
 			prepared = cached.prepared
 		} else {
-			prepared = _pretext!.prepareWithSegments(element.textContent ?? '', getCanvasFontStyle(element))
+			prepared = _pretext!.prepareWithSegments(element.textContent ?? '', fontStyle)
 			pretextCache.set(element, { originalHTML, prepared })
 		}
-		const lineHeight = getLineHeightPx(element)
-		const { lines: pretextLines } = _pretext!.layoutWithLines(prepared, containerWidth, lineHeight)
-
+		const { lines: pretextLines } = _pretext!.layoutWithLines(prepared, contentWidth, getLineHeightPx(element))
+		const toSeg = (item: HTMLElement): Segment => {
+			const info = meta.get(item)
+			return { item, text: info?.atomic ? '' : item.textContent ?? '', top: 0, bottom: 0, lead: info?.lead ?? '', breakBefore: info?.breakBefore ?? null, atomic: !!info?.atomic, first: true }
+		}
 		let si = 0
 		for (const pl of pretextLines) {
-			const target = pl.text.replace(/\s+/g, ' ').trim()
-			const spans: HTMLElement[] = []
+			const target = pl.text.replace(/\s+/g, '')
+			const line: Segment[] = []
 			let acc = ''
-			while (si < wordSpans.length) {
-				const word = (wordSpans[si].textContent ?? '').replace(/\s+/g, ' ').trim()
-				acc = acc ? acc + ' ' + word : word
-				spans.push(wordSpans[si])
+			while (si < items.length) {
+				acc += (items[si].textContent ?? '').replace(/\s+/g, '')
+				line.push(toSeg(items[si]))
 				si++
-				if (acc === target) break
+				if (acc.length >= target.length) break
 			}
-			if (spans.length > 0) {
-				lines.push({ text: pl.text.trim(), width: pl.width, height: lineHeight, spans })
-			}
+			if (line.length) lines.push(line)
 		}
-		while (si < wordSpans.length) {
-			lines[lines.length - 1]?.spans.push(wordSpans[si++])
-		}
-		// Rebuild text for any lines that got extra spans
-		for (const line of lines) {
-			line.text = line.spans.map((s) => s.textContent ?? '').join('').trim()
-		}
-	} else {
-		// BCR path — batch all reads before any writes
-		let currentTop: number | null = null
-		let currentLine: LineData | null = null
-
-		for (const span of wordSpans) {
-			const bcr = span.getBoundingClientRect()
-			const top = Math.round(bcr.top)
-
-			if (currentTop === null || top !== currentTop) {
-				currentTop = top
-				currentLine = {
-					text: '',
-					width: bcr.width,
-					height: bcr.height || fontSize,
-					spans: [span],
-				}
-				lines.push(currentLine)
-			} else {
-				currentLine!.width += bcr.width
-				if (bcr.height > currentLine!.height) currentLine!.height = bcr.height
-				currentLine!.spans.push(span)
-			}
-		}
-
-		for (const line of lines) {
-			line.text = line.spans.map((s) => s.textContent ?? '').join('').trim()
-		}
-	}
-
-	if (lines.length === 0) {
-		requestAnimationFrame(() => {
-			if (Math.abs(window.scrollY - scrollY) > 2) {
-				window.scrollTo({ top: scrollY, behavior: 'instant' })
-			}
+		while (si < items.length) lines[lines.length - 1]?.push(toSeg(items[si++]))
+		// An author <br> always starts a line.
+		lines = lines.flatMap((line) => {
+			const out: Segment[][] = [[]]
+			line.forEach((seg, k) => { if (k > 0 && seg.breakBefore) out.push([]); out[out.length - 1].push(seg) })
+			return out
 		})
-		return
+	} else {
+		// BCR path. A word the browser itself breaks across lines (after a hyphen, or with
+		// overflow-wrap) is split into one segment per line at the real break.
+		const segments: Segment[] = []
+		for (const item of items) {
+			const rects = item.getClientRects?.()
+			const rect = rects && rects.length ? rects[0] : item.getBoundingClientRect()
+			const info = meta.get(item)
+			const text = info?.atomic ? '' : item.textContent ?? ''
+			if (rects && rects.length > 1 && !info?.atomic && item.firstChild?.nodeType === Node.TEXT_NODE) {
+				for (const [k, piece] of splitAtLineBreaks(item.firstChild as Text, text).entries()) {
+					segments.push({ item, text: piece.text, top: piece.top, bottom: piece.bottom, lead: k === 0 ? info?.lead ?? '' : '', breakBefore: k === 0 ? info?.breakBefore ?? null : null, atomic: false, first: k === 0 })
+				}
+				continue
+			}
+			segments.push({ item, text, top: rect.top, bottom: rect.bottom ?? rect.top, lead: info?.lead ?? '', breakBefore: info?.breakBefore ?? null, atomic: !!info?.atomic, first: true })
+		}
+		// A word starts a new line when its vertical middle is below the bottom of the current line's
+		// boxes: a superscript, subscript, emoji or inline image stays in its line, and lines whose
+		// glyph boxes overlap (a tight line-height) stay apart. Grouping by exact top split a line
+		// at every <sub>, <sup> or emoji.
+		let current: Segment[] | null = null
+		let groupBottom = -Infinity
+		for (const seg of segments) {
+			const middle = (seg.top + seg.bottom) / 2
+			if (current === null || middle > groupBottom || (current.length > 0 && seg.breakBefore)) {
+				current = []
+				lines.push(current)
+				groupBottom = seg.bottom
+			} else {
+				groupBottom = Math.max(groupBottom, seg.bottom)
+			}
+			current.push(seg)
+		}
 	}
+
+	if (lines.length === 0) return
+
+	const lineHeightPx = getLineHeightPx(element)
+	const lineTexts = lines.map((line) => line.map((seg, k) => (k > 0 ? seg.lead : '') + seg.text).join('').replace(/\s+/g, ' ').trim())
 
 	// --- Pass 4: Measure density per line ---
-	// Two modes: 'canvas' (default) and 'glyph-path' (opentype.js, exact area).
-	// glyph-path falls back to canvas if opentype.js is not loaded or fontUrl is absent.
-
-	const useGlyphPath = densityMode === 'glyph-path' && _opentype !== null && !!options.fontUrl
-
-	// For glyph-path mode, attempt to load the font — use canvas while loading.
-	// If the font is already in _fontCache the callback fires synchronously.
+	// glyph-path needs opentype.js and the font file; until both are loaded, canvas is used and the
+	// element is re-applied once they are.
 	let loadedFont: OpentypeFont | null = null
-	if (useGlyphPath) loadFont(options.fontUrl!, (f) => { loadedFont = f })
+	// True while this apply is measuring: a font from the cache calls back synchronously and is used
+	// directly; one that arrives later triggers a re-apply.
+	let sync = true
+	if (densityMode === 'glyph-path' && opts.fontUrl) {
+		if (_opentype !== null) {
+			loadFont(opts.fontUrl, (f) => {
+				if (loadedFont === null && f && latestApply.get(element) === applyToken && sync === false) {
+					// Loaded after this apply finished: re-apply with glyph paths.
+					applyGrayValue(element, originalHTML, opts, _canvas)
+				}
+				loadedFont = f
+			})
+		} else if (_opentypeLoading) {
+			retryWhenLoaded(() => _opentype !== null, () => { if (latestApply.get(element) === applyToken) applyGrayValue(element, originalHTML, opts, _canvas) })
+		}
+	}
 
 	const canvas: HTMLCanvasElement = _canvas ?? document.createElement('canvas')
-
-	const densities: number[] = lines.map((line) => {
-		if (useGlyphPath && loadedFont) {
-			return measureLineDensityGlyph(line.text, loadedFont, fontSize, line.height || fontSize)
-		}
-		return measureLineDensity(line.text, fontStyle, line.height || fontSize, canvas, darkMode)
+	const densities: number[] = lineTexts.map((text) => {
+		if (loadedFont) return measureLineDensityGlyph(text, loadedFont, fontSize, lineHeightPx || fontSize)
+		return measureLineDensity(text, fontStyle, lineHeightPx || fontSize, canvas, darkMode)
 	})
+	sync = false
 
-	// --- Pass 5: Calculate target density ---
+	// --- Pass 5: Target density ---
 	let targetDensity: number
 	if (typeof targetDensityOpt === 'number') {
 		targetDensity = targetDensityOpt
 	} else {
-		// 'auto' — use the average density across all lines
 		const sum = densities.reduce((acc, d) => acc + d, 0)
 		targetDensity = densities.length > 0 ? sum / densities.length : 0
 	}
 
-	// --- Pass 6: Calculate per-line spacing adjustment (linear approximation) ---
-	// Compute per-line density targets.
-	// In 'equalize' mode all lines share the same target.
-	// In 'readability' mode, complex lines get a higher target so the algorithm
-	// opens them up slightly more; simple lines get a lower target.
+	// --- Pass 6: Per-line correction ---
+	// Equalize: every line aims at the same density. Readability: complex lines aim lower (opened up)
+	// and simple lines higher, by up to ±10% of the target at strength 1. (This used to add the
+	// maxAdjustment value — an em amount — to a density.)
 	let perLineTargets: number[]
-
 	if (mode === 'readability') {
-		// Compute per-line cognitive complexity
-		const complexityScores = lines.map((line) => {
-			const words = line.text.split(/\s+/).filter(Boolean)
+		const complexityScores = lineTexts.map((text) => {
+			const words = text.split(/\s+/).filter(Boolean)
 			if (words.length === 0) return 0
 			if (complexity === 'syllable' && _syllable !== null) {
 				return words.reduce((sum, w) => sum + _syllable!(w), 0) / words.length
 			}
-			// 'word-length' (default) and 'pos' fallback
 			return words.reduce((sum, w) => sum + w.length, 0) / words.length
 		})
-
 		const minC = Math.min(...complexityScores)
-		const maxC = Math.max(...complexityScores)
-		const rangeC = maxC - minC || 1
-
-		// Normalize to [0, 1]. Complex lines get a LOWER density target so the
-		// algorithm opens them up (more spacing); simple lines get a higher target
-		// so they tighten slightly. Range is ±maxAdjustment×strength at strength=1.
-		perLineTargets = complexityScores.map((c) => {
-			const nc = (c - minC) / rangeC // 0 = simplest, 1 = most complex
-			return targetDensity - (nc - 0.5) * strength * maxAdjustment * 2
-		})
+		const rangeC = Math.max(...complexityScores) - minC || 1
+		perLineTargets = complexityScores.map((c) => targetDensity * (1 - ((c - minC) / rangeC - 0.5) * strength * 0.2))
 	} else {
 		perLineTargets = densities.map(() => targetDensity)
 	}
 
-	// Per-line adjustment (linear approximation).
-	// delta = (density - perLineTarget) * calibrationFactor
-	// Dense lines (density > target) → positive delta → open up (more space / lighter weight / narrower).
-	// Sparse lines (density < target) → negative delta → tighten (less space / heavier weight / wider).
-	// Clamped to ±maxAdjustment (em for spacing, weight units for font-weight, wdth units for font-width).
+	// delta = (density − target) × calibrationFactor, in em for the spacing methods. Weight and width
+	// work in their own units (~1000× larger), so the same density difference is scaled to them.
+	const unitScale = method === 'font-weight' || method === 'font-width' ? 1000 : 1
 	const adjustments: number[] = densities.map((density, i) => {
-		const delta = (density - perLineTargets[i]) * calibrationFactor
-		if (Math.abs(delta) < tolerance) return 0
+		const delta = (density - perLineTargets[i]) * calibrationFactor * unitScale
+		if (Math.abs(delta) < tolerance * unitScale) return 0
 		return Math.max(-maxAdjustment, Math.min(maxAdjustment, delta))
 	})
 
-	// --- Pass 7: Write — rebuild HTML with gv-line spans ---
-	// Reset to original HTML, then re-wrap into line spans.
-	// Each line gets its own span with the computed spacing applied.
-	element.innerHTML = originalHTML
+	// --- Pass 7: Write — one gv-line span per line ---
+	const chains = new Map<Segment, Element[]>()
+	for (const line of lines) {
+		for (const seg of line) {
+			const ancestors: Element[] = []
+			let node: Element | null = seg.item.parentElement
+			while (node && node !== element) {
+				ancestors.unshift(node)
+				node = node.parentElement
+			}
+			chains.set(seg, ancestors)
+		}
+	}
 
-	const LINE_STYLE = 'display:inline-block;white-space:nowrap;vertical-align:top;'
+	const justify = computedStyle.textAlign === 'justify'
+	const ws = computedStyle.whiteSpace
+	const lineWhiteSpace = ws === 'pre' || ws === 'pre-wrap' || ws === 'break-spaces' ? 'pre' : 'nowrap'
+	const copied = new Set<Element>()
+	const fragment = document.createDocumentFragment()
+	const lineEls: HTMLElement[] = []
 
-	let html = ''
-	lines.forEach((line, i) => {
-		const adj = adjustments[i]
-		let lineStyle: string
-		if (method === 'font-weight') {
-			// Dense lines get positive adj → subtract to lighten; sparse lines get negative adj → add to darken.
-			const newWeight = Math.max(1, Math.min(1000, Math.round(baseWeight - adj)))
-			lineStyle = `${LINE_STYLE}font-weight:${newWeight};`
-		} else if (method === 'font-width') {
-			// Dense lines get positive adj → subtract to narrow (less ink); sparse → add to widen.
-			// Note: font-variation-settings on child spans replaces the inherited value entirely.
-			const newWidth = Math.max(50, Math.min(200, +(100 - adj).toFixed(1)))
-			lineStyle = `${LINE_STYLE}font-variation-settings:"wdth" ${newWidth};`
-		} else {
-			const spacingProp = method === 'word-spacing' ? 'word-spacing' : 'letter-spacing'
-			lineStyle = `${LINE_STYLE}${spacingProp}:${adj}em;`
+	lines.forEach((line, lineIndex) => {
+		const adj = adjustments[lineIndex]
+		const lineSpan = document.createElement('span')
+		lineSpan.className = GRAY_VALUE_CLASSES.line
+		lineSpan.style.display = 'inline-block'
+		lineSpan.style.whiteSpace = lineWhiteSpace
+		lineSpan.style.verticalAlign = 'top'
+		// text-indent is inherited: without this every line would be indented, not just the first.
+		lineSpan.style.textIndent = '0'
+		if (adj !== 0) {
+			if (method === 'font-weight') {
+				// Dense lines get positive adj → lighter; sparse lines → heavier.
+				lineSpan.style.fontWeight = String(Math.max(1, Math.min(1000, Math.round(baseWeight - adj))))
+			} else if (method === 'font-width') {
+				// Dense lines get positive adj → wider. (Narrower glyphs pack the same strokes into less
+				// width, so they measure denser; widening a dense line lightens it.) Other axes are kept.
+				lineSpan.style.fontVariationSettings = withAxis(baseFVS, 'wdth', Math.max(50, Math.min(200, +(100 + adj).toFixed(1))))
+			} else if (method === 'word-spacing') {
+				lineSpan.style.wordSpacing = authorWordSpacing ? `calc(${authorWordSpacing} + ${adj}em)` : `${adj}em`
+			} else {
+				lineSpan.style.letterSpacing = authorLetterSpacing ? `calc(${authorLetterSpacing} + ${adj}em)` : `${adj}em`
+			}
+		}
+		// Justified text: every line but the last of a paragraph (and lines before an author <br>)
+		// fills the column.
+		const nextSeg = lines[lineIndex + 1]?.[0]
+		if (justify && nextSeg && !nextSeg.breakBefore && contentWidth > 0) {
+			lineSpan.style.width = `${contentWidth}px`
+			lineSpan.style.textAlignLast = 'justify'
 		}
 
-		// Reconstruct line text from spans; trim leading whitespace on each line start.
-		// Escape HTML special characters: textContent returns decoded Unicode (e.g. '<'
-		// not '&lt;'), so bare < > & would be mis-parsed when assigned to innerHTML.
-		const rawLineText = line.spans
-			.map((s, si) => {
-				const t = s.textContent ?? ''
-				return si === 0 ? t.replace(/^[^\S\u00a0]+/, '') : t
-			})
-			.join('')
-		const lineText = rawLineText
-			.replace(/&/g, '&amp;')
-			.replace(/</g, '&lt;')
-			.replace(/>/g, '&gt;')
+		// Rebuild the line inside its inline ancestors. The first appearance of an element reuses the
+		// original (keeping its listeners); a later line gets a copy without its id.
+		let openChain: { source: Element; clone: Element }[] = []
+		line.forEach((seg, k) => {
+			const ancestors = chains.get(seg) ?? []
+			let shared = 0
+			while (shared < openChain.length && shared < ancestors.length && openChain[shared].source === ancestors[shared]) shared++
+			openChain = openChain.slice(0, shared)
+			let parent: Node = shared ? openChain[shared - 1].clone : lineSpan
+			let lead = seg.lead
+			if (k === 0) lead = lead.replace(/[\r\n]+/g, '')
+			if (lead) parent.appendChild(document.createTextNode(lead))
+			for (let a = shared; a < ancestors.length; a++) {
+				let copy: Element
+				if (copied.has(ancestors[a])) {
+					copy = ancestors[a].cloneNode(false) as Element
+					copy.removeAttribute('id')
+				} else {
+					copy = ancestors[a]
+					copy.replaceChildren()
+				}
+				copied.add(ancestors[a])
+				parent.appendChild(copy)
+				openChain.push({ source: ancestors[a], clone: copy })
+				parent = copy
+			}
+			parent.appendChild(seg.atomic ? seg.item : document.createTextNode(seg.text))
+		})
 
-		html += `<span class="${GRAY_VALUE_CLASSES.line}" style="${lineStyle}">${lineText}</span>`
-		if (i < lines.length - 1) {
-			html += `<br data-gv-break="1">`
+		fragment.appendChild(lineSpan)
+		lineEls.push(lineSpan)
+		if (lineIndex < lines.length - 1) {
+			const authorBreak = lines[lineIndex + 1][0].breakBefore
+			if (authorBreak) {
+				fragment.appendChild(authorBreak.cloneNode(false))
+			} else {
+				const br = document.createElement('br')
+				br.setAttribute('data-gv-break', '1')
+				br.setAttribute('aria-hidden', 'true')
+				fragment.appendChild(br)
+			}
 		}
 	})
 
-	element.innerHTML = html
+	element.innerHTML = ''
+	element.appendChild(fragment)
 
-	// --- Optional Pass 8: Scale preservation ---
-	// After spacing correction, restore each line to the container's natural width
-	// via a CSS scaleX transform. The density correction remains visually present
-	// (glyph spacing ratios differ), but lines never overflow or fall short of the edge.
-	if (linePreservation === 'scale') {
-		const lineSpanEls = Array.from(
-			element.querySelectorAll<HTMLElement>(`.${GRAY_VALUE_CLASSES.line}`)
-		)
-		// Batch read: measure corrected widths in a single layout pass
-		const correctedWidths = lineSpanEls.map(span => span.getBoundingClientRect().width)
-		// Batch write: apply scaleX to restore each line to containerWidth
-		lineSpanEls.forEach((span, i) => {
-			const cw = correctedWidths[i]
-			if (cw > 0.5 && Math.abs(cw - containerWidth) > 0.5) {
-				span.style.width = `${containerWidth}px`
-				span.style.transform = `scaleX(${(containerWidth / cw).toFixed(6)})`
-				span.style.transformOrigin = 'left center'
+	// --- Optional: scale preservation ---
+	// Each line is scaled back to the width it had before the correction (not stretched to the
+	// container, which distorted short lines), so the column edge doesn't move.
+	if (linePreservation === 'scale' && !justify) {
+		const corrected = lineEls.map((el) => el.getBoundingClientRect().width)
+		const saved = lineEls.map((el) => ({ ls: el.style.letterSpacing, wsp: el.style.wordSpacing, fw: el.style.fontWeight, fvs: el.style.fontVariationSettings }))
+		lineEls.forEach((el) => { el.style.letterSpacing = ''; el.style.wordSpacing = ''; el.style.fontWeight = ''; el.style.fontVariationSettings = '' })
+		const natural = lineEls.map((el) => el.getBoundingClientRect().width)
+		lineEls.forEach((el, i) => {
+			el.style.letterSpacing = saved[i].ls
+			el.style.wordSpacing = saved[i].wsp
+			el.style.fontWeight = saved[i].fw
+			el.style.fontVariationSettings = saved[i].fvs
+			const cw = corrected[i], nw = natural[i]
+			if (cw > 0.5 && nw > 0.5 && Math.abs(cw - nw) > 0.5) {
+				el.style.transform = `scaleX(${(nw / cw).toFixed(6)})`
+				el.style.transformOrigin = 'left center'
 			}
 		})
 	}
+}
 
-	// Restore scroll position after DOM mutations
-	requestAnimationFrame(() => {
-		if (Math.abs(window.scrollY - scrollY) > 2) {
-			window.scrollTo({ top: scrollY, behavior: 'instant' })
-		}
-	})
+/** Prints a console warning the first time it is seen. */
+function warnOnce(message: string): void {
+	if (warned.has(message)) return
+	warned.add(message)
+	console.warn(message)
+}
+
+/** Polls (on animation frames, briefly) until an optional module is ready, then runs the callback once. */
+function retryWhenLoaded(ready: () => boolean, run: () => void, tries = 120): void {
+	if (ready()) { run(); return }
+	if (tries <= 0 || typeof requestAnimationFrame === 'undefined') return
+	requestAnimationFrame(() => retryWhenLoaded(ready, run, tries - 1))
 }
 
 /**
@@ -738,5 +959,9 @@ export function applyGrayValue(
  * @param originalHTML - The clean HTML snapshot passed to applyGrayValue
  */
 export function removeGrayValue(element: HTMLElement, originalHTML: string): void {
-	element.innerHTML = originalHTML
+	const snap = snapshots.get(element)
+	if (snap && snap.html === originalHTML) restoreSnapshot(snap)
+	else element.innerHTML = originalHTML
+	snapshots.delete(element)
+	originals.delete(element)
 }

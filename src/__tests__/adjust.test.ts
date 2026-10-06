@@ -407,3 +407,48 @@ describe('gray-value', () => {
 		expect(cleaned).not.toContain(GRAY_VALUE_CLASSES.word)
 	})
 })
+
+// ─── Review fixes (2026-10) ──────────────────────────────────────────────────
+
+describe('markup, text and listeners survive', () => {
+	beforeEach(() => { document.body.innerHTML = '' })
+
+	it('keeps inline markup, author <br> and the spaces between words; getCleanHTML returns the input', () => {
+		const html = 'The <em>quick brown</em> fox <a href="#x" id="L">jumps over the</a> <strong>lazy</strong> dog.<br>Second line follows the break here.'
+		const el = makeElement(html)
+		const text = el.textContent
+		applyGrayValue(el, html, {}, makeMockCanvas())
+		expect(el.textContent).toBe(text)
+		expect(el.querySelectorAll('a').length).toBeGreaterThan(0)
+		expect(el.querySelectorAll('#L').length).toBe(1)
+		expect(getCleanHTML(el)).toBe(html)
+	})
+
+	it('re-applying from getCleanHTML does not lose words', () => {
+		const html = Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ')
+		const el = makeElement(html)
+		for (let i = 0; i < 4; i++) applyGrayValue(el, getCleanHTML(el), {}, makeMockCanvas())
+		expect((el.textContent ?? '').split(/\s+/).filter(Boolean).length).toBe(30)
+	})
+
+	it('keeps the original elements, so their listeners survive a refit and removal', () => {
+		const html = 'Please read <a href="#">our terms</a> carefully before you continue.'
+		const el = makeElement(html)
+		const link = el.querySelector('a')!
+		let clicks = 0
+		link.addEventListener('click', (e) => { e.preventDefault(); clicks++ })
+		applyGrayValue(el, html, {}, makeMockCanvas())
+		applyGrayValue(el, html, {}, makeMockCanvas())
+		el.querySelector('a')!.click()
+		expect(clicks).toBe(1)
+		removeGrayValue(el, html)
+		expect(el.querySelector('a')).toBe(link)
+	})
+
+	it('accepts null options and an out-of-range targetDensity', () => {
+		const html = 'Some words here to fill a line or two of text.'
+		const el = makeElement(html)
+		expect(() => applyGrayValue(el, html, null, makeMockCanvas())).not.toThrow()
+		expect(() => applyGrayValue(el, html, { targetDensity: 2 }, makeMockCanvas())).not.toThrow()
+	})
+})
