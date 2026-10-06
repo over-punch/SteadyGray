@@ -118,6 +118,23 @@ function readOptions(el: HTMLElement): GrayValueOptions {
  *
  * @param el - Element to adjust
  */
+/** Re-runs an element whose own width changed (a container resize the window doesn't see). */
+const widths = new WeakMap<Element, number>()
+const resizeObserver = typeof ResizeObserver !== 'undefined'
+	? new ResizeObserver((entries) => {
+		for (const entry of entries) {
+			const el = entry.target as HTMLElement
+			const w = Math.round(entry.contentRect.width)
+			if (widths.get(el) === w) continue
+			const first = !widths.has(el)
+			widths.set(el, w)
+			if (first) continue
+			const inst = INSTANCES.get(el)
+			if (inst && el.isConnected) applyGrayValue(el, inst.originalHTML, readOptions(el))
+		}
+	})
+	: null
+
 function initElement(el: HTMLElement): void {
 	let inst = INSTANCES.get(el)
 	if (!inst) {
@@ -127,6 +144,7 @@ function initElement(el: HTMLElement): void {
 	}
 	applyGrayValue(el, inst.originalHTML, readOptions(el))
 	TRACKED.add(el)
+	resizeObserver?.observe(el)
 }
 
 /**
@@ -136,6 +154,8 @@ function initElement(el: HTMLElement): void {
  */
 function refit(): void {
 	TRACKED.forEach((el) => {
+		// Removed from the page: stop tracking it.
+		if (!el.isConnected) { TRACKED.delete(el); return }
 		const inst = INSTANCES.get(el)
 		if (inst) applyGrayValue(el, inst.originalHTML, readOptions(el))
 	})
@@ -152,6 +172,8 @@ function destroy(el: HTMLElement): void {
 	removeGrayValue(el, inst.originalHTML)
 	INSTANCES.delete(el)
 	TRACKED.delete(el)
+	resizeObserver?.unobserve(el)
+	widths.delete(el)
 }
 
 /**
@@ -184,6 +206,21 @@ function autoInit(): void {
 			init()
 		}
 		window.addEventListener('resize', onResize)
+		// Fonts that load later change line breaks and glyph shapes.
+		document.fonts?.addEventListener?.('loadingdone', onResize)
+		// Elements added later (CMS lists, interactions) are equalised when they appear.
+		if (typeof MutationObserver !== 'undefined' && document.body) {
+			new MutationObserver((records) => {
+				for (const rec of records) {
+					rec.addedNodes.forEach((n) => {
+						if (!(n instanceof HTMLElement) || !n.isConnected) return
+						const found = n.matches(`[${OPT_IN_ATTR}]`) ? [n] : []
+						n.querySelectorAll<HTMLElement>(`[${OPT_IN_ATTR}]`).forEach((el) => found.push(el))
+						for (const el of found) if (!INSTANCES.has(el)) initElement(el)
+					})
+				}
+			}).observe(document.body, { childList: true, subtree: true })
+		}
 	}
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', run, { once: true })
