@@ -879,7 +879,19 @@ export function applyGrayValue(
 			openChain = openChain.slice(0, shared)
 			let parent: Node = shared ? openChain[shared - 1].clone : lineSpan
 			let lead = seg.lead
-			if (k === 0) lead = lead.replace(/[\r\n]+/g, '')
+			if (k === 0 && /[\r\n]/.test(lead)) {
+				// A newline at a line start is the line break itself, which the line span now provides. If it
+				// was the only separator, a space at the end of the previous line keeps the words apart
+				// (normal white-space, so it collapses at the line end even in a pre line).
+				lead = lead.replace(/[\r\n]+/g, '')
+				if (!lead && lineEls[lineEls.length - 1]) {
+					const space = document.createElement('span')
+					space.className = GRAY_VALUE_CLASSES.word
+					space.style.whiteSpace = 'normal'
+					space.textContent = ' '
+					lineEls[lineEls.length - 1].appendChild(space)
+				}
+			}
 			if (lead) parent.appendChild(document.createTextNode(lead))
 			for (let a = shared; a < ancestors.length; a++) {
 				let copy: Element
